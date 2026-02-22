@@ -1,0 +1,36 @@
+name: raganork-md 
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *' # ഓരോ 6 മണിക്കൂറിലും ഓട്ടോമാറ്റിക് ആയി റൺ ആകും
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          # പ്രോജക്റ്റിൽ പ്രത്യേക ബിൽഡ് സ്റ്റെപ്പ് ഉണ്ടെങ്കിൽ അത് ഇവിടെ നൽകാം
+          # npm run build 
+
+      - name: Start Bot
+        timeout-minutes: 345 # ഗിറ്റ്ഹബ് ലിമിറ്റിന് തൊട്ടു മുൻപ് നിർത്താൻ
+        continue-on-error: true
+        run: npm start
+        env:
+          SESSION: ${{ secrets.SESSION }}
+          
