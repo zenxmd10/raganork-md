@@ -1,268 +1,16 @@
 const { Module } = require("../main");
-const fs = require("fs");
-const path = require("path");
-const {
-  downloadVideo,
-  downloadAudio,
-  searchYoutube,
-  getVideoInfo,
-  convertM4aToMp3,
-} = require("./utils/yt");
-const { spotifyTrack } = require("./utils/misc");
+const axios = require("axios");
 
 const config = require("../config");
 const MODE = config.MODE;
 const fromMe = MODE === "public" ? false : true;
 
-const VIDEO_SIZE_LIMIT = 150 * 1024 * 1024;
-
-function formatBytes(bytes) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
-}
-
-function formatViews(views) {
-  if (views >= 1000000) {
-    return (views / 1000000).toFixed(1) + "M";
-  } else if (views >= 1000) {
-    return (views / 1000).toFixed(1) + "K";
-  }
-  return views?.toString() || "N/A";
-}
-
-Module(
-  {
-    pattern: "song ?(.*)",
-    fromMe: fromMe,
-    desc: "Search YouTube and download audio",
-    usage: ".song <query>",
-    use: "download",
-  },
-  async (message, match) => {
-    const query = match[1];
-    if (!query) {
-      return await message.sendReply(
-        "_Please provide a search query!_\n_Example: .song faded alan walker_"
-      );
-    }
-
-    try {
-      const searchMsg = await message.sendReply("_Searching YouTube..._");
-      const results = await searchYoutube(query, 10);
-
-      if (!results || results.length === 0) {
-        return await message.edit(
-          "_No results found!_",
-          message.jid,
-          searchMsg.key
-        );
-      }
-
-      let resultText = "YouTube Search Results\n\n";
-      resultText += `_Found ${results.length} results for:_ *${query}*\n\n`;
-
-      results.forEach((video, index) => {
-        resultText += `*${index + 1}.* ${video.title}\n`;
-        resultText += `   _Duration:_ \`${
-          video.duration
-        }\` | _Views:_ \`${formatViews(video.views)}\`\n`;
-        resultText += `   _Channel:_ ${video.channel.name}\n\n`;
-      });
-
-      resultText += "_Reply with a number (1-10) to download audio_";
-
-      await message.edit(resultText, message.jid, searchMsg.key);
-    } catch (error) {
-      console.error("Song search error:", error);
-      await message.sendReply("_Search failed. Please try again later._");
-    }
-  }
-);
-
-Module(
-  {
-    pattern: "yts ?(.*)",
-    fromMe: fromMe,
-    desc: "Search YouTube with detailed info",
-    usage: ".yts <query>",
-    use: "download",
-  },
-  async (message, match) => {
-    const query = match[1];
-    if (!query) {
-      return await message.sendReply(
-        "_Please provide a search query!_\n_Example: .yts ncs music_"
-      );
-    }
-
-    try {
-      const searchMsg = await message.sendReply("_Searching YouTube..._");
-      const results = await searchYoutube(query, 10);
-
-      if (!results || results.length === 0) {
-        return await message.edit(
-          "_No results found!_",
-          message.jid,
-          searchMsg.key
-        );
-      }
-
-      let resultText = "YouTube Search Results\n\n";
-      resultText += `_Found ${results.length} results for:_ *${query}*\n\n`;
-
-      results.forEach((video, index) => {
-        resultText += `*${index + 1}.* ${video.title}\n`;
-        resultText += `   _Duration:_ \`${
-          video.duration
-        }\` | _Views:_ \`${formatViews(video.views)}\`\n`;
-        resultText += `   _Channel:_ ${video.channel.name}\n\n`;
-      });
-
-      resultText += "_Reply with a number (1-10) to see video details_";
-
-      await message.edit(resultText, message.jid, searchMsg.key);
-    } catch (error) {
-      console.error("YTS search error:", error);
-      await message.sendReply("_Search failed. Please try again later._");
-    }
-  }
-);
-
-Module(
-  {
-    pattern: "ytv ?(.*)",
-    fromMe: fromMe,
-    desc: "Download YouTube video with quality selection",
-    usage: ".ytv <link>",
-    use: "download",
-  },
-  async (message, match) => {
-    let url = match[1] || message.reply_message?.text;
-
-    if (url && /\bhttps?:\/\/\S+/gi.test(url)) {
-      url = url.match(/\bhttps?:\/\/\S+/gi)[0];
-    }
-
-    if (!url || (!url.includes("youtube.com") && !url.includes("youtu.be"))) {
-      return await message.sendReply(
-        "_Please provide a valid YouTube link!_\n_Example: .ytv https://youtube.com/watch?v=xxxxx or https://youtube.com/shorts/xxxxx_"
-      );
-    }
-
-    // Convert YouTube Shorts URL to regular watch URL if needed
-    if (url.includes("youtube.com/shorts/")) {
-      const shortId = url.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]+)/)?.[1];
-      if (shortId) {
-        url = `https://www.youtube.com/watch?v=${shortId}`;
-      }
-    }
-
-    try {
-      const infoMsg = await message.sendReply("_📊 Fetching video info..._");
-      const info = await getVideoInfo(url);
-
-      const videoFormats = info.formats
-        .filter((f) => f.type === "video" && f.quality)
-        .sort((a, b) => {
-          const getRes = (q) => {
-            const match = q.match(/(\d+)/);
-            return match ? parseInt(match[1]) : 0;
-          };
-          return getRes(b.quality) - getRes(a.quality);
-        });
-
-      const uniqueQualities = [...new Set(videoFormats.map((f) => f.quality))];
-
-      const videoIdMatch = url.match(
-        /(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([^&\s/?]+)/
-      );
-      const videoId = videoIdMatch ? videoIdMatch[1] : info.videoId || "";
-
-      let qualityText = "_*Select Video Quality*_\n\n";
-      qualityText += `_*${info.title}*_\n\n(${videoId})\n\n`;
-
-      if (uniqueQualities.length === 0) {
-        return await message.edit(
-          "_No video formats available for this video._",
-          message.jid,
-          infoMsg.key
-        );
-      }
-
-      uniqueQualities.forEach((quality, index) => {
-        const format = videoFormats.find((f) => f.quality === quality);
-        const audioFormat = info.formats.find((f) => f.type === "audio");
-
-        let sizeInfo = "";
-        if (format.size && audioFormat?.size) {
-          // Parse sizes and estimate total
-          const parseSize = (sizeStr) => {
-            const match = sizeStr.match(/([\d.]+)\s*(KB|MB|GB)/i);
-            if (!match) return 0;
-            const value = parseFloat(match[1]);
-            const unit = match[2].toUpperCase();
-            if (unit === "KB") return value * 1024;
-            if (unit === "MB") return value * 1024 * 1024;
-            if (unit === "GB") return value * 1024 * 1024 * 1024;
-            return value;
-          };
-
-          const videoSize = parseSize(format.size);
-          const audioSize = parseSize(audioFormat.size);
-          const totalSize = videoSize + audioSize;
-
-          if (totalSize > 0) {
-            sizeInfo = ` ~ _${formatBytes(totalSize)}_`;
-          }
-        }
-
-        qualityText += `*${index + 1}.* _*${quality}*_${sizeInfo}\n`;
-      });
-
-      const audioFormat = info.formats.find((f) => f.type === "audio");
-      if (audioFormat) {
-        let audioSizeInfo = "";
-        if (audioFormat.size) {
-          const parseSize = (sizeStr) => {
-            const match = sizeStr.match(/([\d.]+)\s*(KB|MB|GB)/i);
-            if (!match) return 0;
-            const value = parseFloat(match[1]);
-            const unit = match[2].toUpperCase();
-            if (unit === "KB") return value * 1024;
-            if (unit === "MB") return value * 1024 * 1024;
-            if (unit === "GB") return value * 1024 * 1024 * 1024;
-            return value;
-          };
-          const audioSize = parseSize(audioFormat.size);
-          if (audioSize > 0) {
-            audioSizeInfo = ` ~ _${formatBytes(audioSize)}_`;
-          }
-        }
-        qualityText += `*${
-          uniqueQualities.length + 1
-        }.* _*Audio Only*_${audioSizeInfo}\n`;
-      }
-
-      qualityText += "\n_Reply with a number to download_";
-
-      await message.edit(qualityText, message.jid, infoMsg.key);
-    } catch (error) {
-      console.error("YTV info error:", error);
-      await message.sendReply(
-        "_Failed to fetch video info. Please check the link._"
-      );
-    }
-  }
-);
-
+// 1. VIDEO DOWNLOADER (.video)
 Module(
   {
     pattern: "video ?(.*)",
     fromMe: fromMe,
-    desc: "Download YouTube video at 360p",
+    desc: "Download YouTube video using Sparky API",
     usage: ".video <link>",
     use: "download",
   },
@@ -275,49 +23,97 @@ Module(
 
     if (!url || (!url.includes("youtube.com") && !url.includes("youtu.be"))) {
       return await message.sendReply(
-        "_Please provide a valid YouTube link!_\n_Example: .video https://youtube.com/watch?v=xxxxx or https://youtube.com/shorts/xxxxx_"
+        "_Please provide a valid YouTube link!_\n_Example: .video https://youtu.be/xxxxxx_"
       );
     }
 
-    // Convert YouTube Shorts URL to regular watch URL if needed
-    if (url.includes("youtube.com/shorts/")) {
-      const shortId = url.match(/youtube\.com\/shorts\/([A-Za-z0-9_-]+)/)?.[1];
-      if (shortId) {
-        url = `https://www.youtube.com/watch?v=${shortId}`;
+    let downloadMsg;
+    try {
+      downloadMsg = await message.sendReply("_Downloading video..._");
+
+      // Sparky Video API
+      const apiUrl = `https://api.sparky.biz.id/api/downloader/ytv?url=${encodeURIComponent(url)}`;
+      const response = await axios.get(apiUrl);
+
+      if (!response.data || !response.data.status) {
+        return await message.edit("_Error: Video not found or API down!_", message.jid, downloadMsg.key);
       }
+
+      const videoData = response.data.data;
+      await message.edit(`_Uploading: *${videoData.title}*..._`, message.jid, downloadMsg.key);
+
+      await message.sendMessage(
+        message.jid,
+        { 
+          video: { url: videoData.url }, 
+          caption: `_*${videoData.title}*_` 
+        },
+        { quoted: message }
+      );
+
+      await message.edit("_Download complete!_", message.jid, downloadMsg.key);
+    } catch (error) {
+      console.error("Video error:", error);
+      await message.edit("_Failed to download video._", message.jid, downloadMsg.key);
+    }
+  }
+);
+
+// 2. AUDIO/SONG DOWNLOADER (.audio)
+Module(
+  {
+    pattern: "audio ?(.*)",
+    fromMe: fromMe,
+    desc: "Download YouTube audio using Sparky API",
+    usage: ".audio <link or query>",
+    use: "download",
+  },
+  async (message, match) => {
+    let input = match[1] || message.reply_message?.text;
+
+    if (!input) {
+      return await message.sendReply(
+        "_Please provide a link or song name!_\n_Example: .audio https://youtu.be/xxxxxx_"
+      );
+    }
+
+    // Extract URL if present
+    if (/\bhttps?:\/\/\S+/gi.test(input)) {
+      input = input.match(/\bhttps?:\/\/\S+/gi)[0];
     }
 
     let downloadMsg;
-    let videoPath;
-
     try {
-      downloadMsg = await message.sendReply("_Downloading video..._");
-      const result = await downloadVideo(url, "360p");
-      videoPath = result.path;
+      downloadMsg = await message.sendReply("_Downloading audio..._");
 
-      await message.edit("_Uploading video..._", message.jid, downloadMsg.key);
+      // Sparky Audio/Song API
+      const apiUrl = `https://api.sparky.biz.id/api/downloader/song?search=${encodeURIComponent(input)}`;
+      const response = await axios.get(apiUrl);
 
-      const stats = fs.statSync(videoPath);
-
-      if (stats.size > VIDEO_SIZE_LIMIT) {
-        const stream = fs.createReadStream(videoPath);
-        await message.sendMessage({ stream }, "document", {
-          fileName: `${result.title}.mp4`,
-          mimetype: "video/mp4",
-          caption: `_*${result.title}*_\n\n_File size: ${formatBytes(
-            stats.size
-          )}_\n_Quality: 360p_`,
-        });
-        stream.destroy();
-      } else {
-        const stream = fs.createReadStream(videoPath);
-        await message.sendReply({ stream }, "video", {
-          caption: `_*${result.title}*_\n\n_Quality: 360p_`,
-        });
-        stream.destroy();
+      if (!response.data || !response.data.status) {
+        return await message.edit("_Error: Audio not found!_", message.jid, downloadMsg.key);
       }
 
-      await message.edit("_Download complete!_", message.jid, downloadMsg.key);
+      const audioData = response.data.data;
+      await message.edit(`_Uploading: *${audioData.title}*..._`, message.jid, downloadMsg.key);
+
+      await message.sendMessage(
+        message.jid,
+        { 
+          audio: { url: audioData.url }, 
+          mimetype: "audio/mpeg"
+        },
+        { quoted: message }
+      );
+
+      await message.edit(`_Successfully sent *${audioData.title}*_`, message.jid, downloadMsg.key);
+    } catch (error) {
+      console.error("Audio error:", error);
+      await message.edit("_Failed to download audio._", message.jid, downloadMsg.key);
+    }
+  }
+);
+d, downloadMsg.key);
 
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (fs.existsSync(videoPath)) {
@@ -1074,3 +870,4 @@ Module(
     }
   }
 );
+
