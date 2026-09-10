@@ -1,0 +1,29 @@
+step "ubuntu" {
+    name = "ubuntu"
+    properties = {
+        Octopus.Action.TargetRoles = "Docker"
+    }
+
+    action {
+        action_type = "Octopus.DockerNetwork"
+        properties = {
+            Octopus.Action.Docker.NetworkType = "bridge"
+        }
+        worker_pool_variable = ""
+    }
+}
+
+step "creat-dockerfile" {
+    name = "creat dockerfile"
+    properties = {
+        Octopus.Action.TargetRoles = "R,Docker"
+    }
+
+    action {
+        action_type = "Octopus.DockerNetwork"
+        properties = {
+            Octopus.Action.Docker.NetworkType = "bridge"
+        }
+        worker_pool_variable = ""
+    }
+}
